@@ -1,90 +1,91 @@
 # AGENTS.md — AdsiExplorer
 
-Guidance for AI agents and contributors working in this repository.
+Read-only Active Directory exploration over ADSI. Windows only. Two stacks must stay in command and filter parity.
 
-## What this project is
+| Stack | Entry | When to edit |
+|-------|--------|----------------|
+| PowerShell 5.1+ | `src/AdsiExplorer.ps1` | Shell commands, help, table output |
+| PowerShell core | `src/AdsiCore.ps1` | Connect, search paging, LDAP escape, formatters |
+| PowerShell extras | `src/AdsiCoreAdvanced.ps1` | Named queries, schema, members, tree, SID resolve |
+| PowerShell shell extras | `src/AdsiShellAdvanced.ps1` | Query plan, count/next, profiles, aliases, history |
+| .NET 8 | `dotnet/AdsiExplorer/` | The C# mirror of the same behavior |
 
-Read-only **Active Directory** exploration via **ADSI** (`System.DirectoryServices` / PowerShell ADSI). Two parallel implementations share the same interactive command vocabulary:
+User-facing usage lives in `README.md`. Do not duplicate it here.
 
-| Stack | Entry | Core logic |
-|-------|--------|------------|
-| PowerShell 5.1+ | `src/AdsiExplorer.ps1` | `AdsiCore.ps1`, `AdsiCoreAdvanced.ps1`, `AdsiShellAdvanced.ps1` |
-| .NET 8 (Windows) | `dotnet/AdsiExplorer/Program.cs` | `InteractiveShell.cs`, `AdsiSearchService.cs`, `LdapFilter.cs`, `AdsiSession.cs`, etc. |
+## Change checklist
 
-**Windows only.** No AD write operations.
+Touch both stacks for any user-visible command, flag, filter, or connect option.
 
-## Before you change code
+1. PowerShell: command function plus the switch in `Invoke-AdsiShellCommand`, and `Show-AdsiShellHelp` when the command is new.
+2. Query flags (`-filter`, `-query`, `-days`, `-props`, `-sort`, `-type`): `ConvertTo-AdsiQueryPlan` in `AdsiShellAdvanced.ps1` and `ParseQueryOptions` in `InteractiveShell.cs`.
+3. C#: matching method and `switch` in `InteractiveShell.Run`, plus help text in `PrintHelp`.
+4. LDAP filter logic: `AdsiCore.ps1` / `AdsiCoreAdvanced.ps1` and `LdapFilter.cs` / `AdsiNamedQueries.cs` / `AdsiDirectoryAdvanced.cs`.
+5. `dotnet build .\dotnet\AdsiExplorer\AdsiExplorer.csproj -c Release`. A live DC smoke test is optional and only with credentials the user supplies at runtime.
 
-1. Read `README.md` for user-facing behavior and security notes.
-2. Prefer **minimal diffs**; keep PowerShell and C# behavior aligned when touching search, connect, or shell commands.
-3. **Never** commit credentials, lab IPs tied to real environments, or `%APPDATA%\AdsiExplorer` exports.
-4. Do **not** add `-password` to the .NET CLI (use prompt or `ADSI_PASSWORD`, then clear from process env after read — see `Program.cs` / `InteractiveShell.cs`).
+Do not add AD writes (`CommitChanges`, `Put`, `DeleteTree`, set-password). Do not add `-password` to the .NET CLI.
 
-## Architecture (PowerShell)
+## Where behavior lives (.NET)
 
-```
-AdsiExplorer.ps1          # param block, shell loop, command dispatch
-  ├─ AdsiCore.ps1         # Escape-LdapFilterValue, Connect-AdsiDirectory, Search-AdsiObjects, formatters
-  ├─ AdsiCoreAdvanced.ps1 # named queries, schema, members/memberOf, tree, SID resolve
-  └─ AdsiShellAdvanced.ps1 # profiles/aliases/history, query plan, count/next, persistence under %APPDATA%
-```
+| File | Role |
+|------|------|
+| `Program.cs` | CLI args. Password from prompt or `ADSI_PASSWORD`, then clear the process env var. |
+| `AdsiSession.cs` | Bind. Credentials stay in `SecureString`. LDAP+user uses `AuthenticationTypes.Secure`; `-ssl` uses `SecureSocketsLayer`. Not both with `-gc`. |
+| `AdsiSearchService.cs` | `Search` mirrors `Search-AdsiObjects`. |
+| `LdapFilter.cs` | Escape, attribute-name check, SID and GUID filters. |
+| `AdsiNamedQueries.cs` | Preset filters and UAC flag decode. |
+| `AdsiDirectoryAdvanced.cs` | Schema, members, memberOf, tree, resolve. |
+| `InteractiveShell.cs` | Commands, paging, tables. |
+| `PropertyPresets.cs` / `AdsiPropertyFormatter.cs` | Property sets and display. |
+| `ShellPersistence.cs` / `ShellState.cs` | `%APPDATA%\AdsiExplorer` aliases, profiles, history. |
 
-Session object: server, base DN, `SearchEntry`, `Credential` (SecureString), `UseSsl`, `UseGlobalCatalog` — **no plain-text password field**.
+PowerShell session fields: `Server`, `BaseDn`, `SearchEntry`, `Credential`, `UserName`, `UseSsl`, `UseGlobalCatalog`. No plaintext `Password` property.
 
-Search output: `Filter`, `Results`, `HasMore`, `Truncated` (same as `HasMore`), `Skip`, `SortLimited`.
+Search result fields: `Filter`, `Results`, `Count`, `HasMore`, `Truncated` (same value as `HasMore`), `Skip`, `SortLimited`.
 
-## Architecture (.NET)
+## Commands (keep both switches in sync)
 
-- `AdsiSession` — connect, naming contexts, `DirectoryEntry` with `Secure` (LDAP) or `SecureSocketsLayer` (LDAPS).
-- `AdsiSearchService.Search` — mirrors `Search-AdsiObjects` paging/skip/hasMore.
-- `LdapFilter` — escape values, validate attribute names (`^[\w.-]+$`), binary `objectSid` / AD `objectGUID` filters.
-- `InteractiveShell` — command parity with PowerShell shell; `ShellPersistence` for aliases/profiles JSON.
+`connect`, `status`, `list`, `search`, `show`, `props`, `limit`, `page`, `export`, `base`, `width`, `count`, `next`, `tree`, `members`, `memberof`, `resolve`, `schema`, `context`, `profile`, `alias`, `history`, `help`, `quit`/`exit`.
 
-Build:
+Object types: `users`, `groups`, `computers`, `ous`, `all`.
+
+Named queries (`-query`): `disabled`, `locked`, `pwd-never-expires`, `spn`, `empty-groups`, `stale-computers` (`-days`). Matching-rule syntax such as `userAccountControl:1.2.840.113556.1.4.803:=2` belongs only in those named-query builders. User attribute names cannot contain `:`.
+
+## LDAP rules
+
+Build filters only through the helpers. Do not concatenate user text into a filter string.
+
+- Values: `Escape-LdapFilterValue` / `LdapFilter.EscapeValue`. If the value contains `*`, split on `*`, escape each segment, rejoin with `*`.
+- Attribute names: `Test-LdapFilterAttributeName` / `LdapFilter.ValidateAttributeName` (`^[\w.-]+$`) before the name is placed in the filter.
+- `objectSid`: `^S-1(-\d+)+$`, then `SecurityIdentifier` binary form as `\xx` octets. `New-AdsiObjectSidFilter` / `LdapFilter.BuildObjectSidFilter`.
+- `objectGUID`: parse the GUID, swap to AD byte order, emit `\xx`.
+- `list -filter "(...)"` is a trusted raw filter. Leave it. Do not route it through the attribute validator.
 
 ```powershell
-dotnet build .\dotnet\AdsiExplorer\AdsiExplorer.csproj -c Release
-.\dotnet\publish.ps1   # optional publish; stop running AdsiExplorer.exe first if publish fails (file lock)
+# Use this
+New-AdsiSearchFilter -Attribute $attr -Value $value -ObjectType Users
+New-AdsiObjectSidFilter -Sid $sid
+
+# Not this
+"(objectSid=$sid)"
+"($attr=$value)"
 ```
 
-Smoke test (requires live DC and credentials):
+## Shell behavior to preserve
 
-```powershell
-.\src\Invoke-AdsiCoreTest.ps1 -Server dc01.contoso.com -Username 'DOMAIN\user' -Password (Read-Host -AsSecureString)
-```
+- Paging is client-side: skip N results from `FindAll()`, then take `MaxResults`. `HasMore` is true only when another row exists past the page. Set `Truncated` to that same flag.
+- `next` re-runs `LastQueryPlan` with `Skip + MaxResults`.
+- `-sort` sorts the current page only. If `HasMore` or `Skip > 0`, set `SortLimited` and print the existing page-local note.
+- Aliases: reject `` ` ``, `|`, `;`, and newlines on save and on expand (`Test-AdsiShellAliasCommand` / `ValidateAliasExpansion`).
+- Tables: column width is max(header, cell). PowerShell `Format-AdsiShellResultTable`; C# `PrintTable`. Prefer `Write-Host` / `Console.WriteLine` so `-Commands` batch mode still shows output.
+- PowerShell parameter names: use `$ShellArgs` and `-Commands`. `$Args` and `-Command` collide with built-ins.
 
-## LDAP / security conventions
+## Secrets and git
 
-When building filters from user input:
+- Never commit passwords, real lab hosts, or files from `%APPDATA%\AdsiExplorer`.
+- README and usage examples stay generic (`dc01.contoso.com`, `CONTOSO\your.user`).
+- Commit only when the user asks. `.gitignore` already drops `bin/`, `obj/`, `publish/`, and `*.exe`.
+- Publish with `.\dotnet\publish.ps1`. If the exe is locked, the user must close the running `AdsiExplorer.exe` first. Do not kill it unless they ask.
 
-- **Values**: `Escape-LdapFilterValue` / `LdapFilter.EscapeValue` (wildcards split then escape segments).
-- **Attribute names**: `Test-LdapFilterAttributeName` / `LdapFilter.ValidateAttributeName` — do not inject raw attribute strings into filters.
-- **objectSid**: validate `^S-1(-\d+)+$`, emit **binary** octet form in the filter (not `S-1-...` text).
-- **objectGUID**: parse GUID, convert to AD byte order, hex `\xx` form.
-- **Raw filters**: `list -filter "(...)"` is intentional escape hatch — document only; do not “fix” by blocking without user request.
+## Auth note
 
-Named queries with LDAP matching rules live in `Get-AdsiNamedQueryFilter` / `AdsiNamedQueries.cs`, not in user-supplied attribute names.
-
-## Shell command parity
-
-When adding or changing a command, update **both** `AdsiExplorer.ps1` dispatch and `InteractiveShell.cs` switch (and help text in both). Common commands: `connect`, `list`, `search`, `show`, `props`, `count`, `next`, `export`, `tree`, `members`, `memberof`, `resolve`, `schema`, `context`, `profile`, `alias`, `history`, `help`.
-
-Paging: client-side skip over `FindAll()` enumeration; `next` re-runs last query plan with increased skip. `-sort` is **page-local** when `HasMore` or skip &gt; 0 — surface `SortLimited` note in output.
-
-## UI / output
-
-- Table columns: width = max(header, cells); use existing formatters (`Format-AdsiShellResultTable`, .NET `PrintTable`).
-- Use `Write-Host` / `Console.WriteLine` for batch-visible output where the codebase already does.
-
-## Git / releases
-
-- Commit only when the user asks.
-- `.gitignore` excludes `bin/`, `obj/`, publish output.
-- Solution: `AdsiExplorer.sln` at repo root.
-
-## Common pitfalls
-
-- **Parity drift**: C# missing a flag (e.g. `-ssl`, `-query`, `-days`) that PS supports — check `ConvertTo-AdsiQueryPlan` / `ParseQueryOptions`.
-- **Authentication**: `Secure` uses Negotiate; binding by IP to a non-domain machine may need LDAPS (`-ssl`).
-- **Publishing**: locked `AdsiExplorer.exe` in `bin/.../publish/` breaks publish — user must close the process.
-- **PowerShell**: avoid `$Args` and `-Command` as parameter names (automatic/builtin conflicts); project uses `$ShellArgs`, `-Commands`.
+`AuthenticationTypes.Secure` is Negotiate. A bind to a DC by IP from a non-domain machine can fail when NTLM is disabled. `-ssl` / `-UseSsl` is the supported workaround. Do not fall back to `AuthenticationTypes.None` for credentialed binds.
