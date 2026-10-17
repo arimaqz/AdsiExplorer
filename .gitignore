@@ -1,0 +1,32 @@
+# Build outputs
+**/bin/
+**/obj/
+**/publish/
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+
+# User/runtime data (profiles store server/user only; passwords are never saved)
+**/AppData/
+
+# IDE / OS
+.vs/
+.idea/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
+
+# Logs and exports
+*.log
+_export.*
+_test_export.*
+
+# NuGet
+*.nupkg
+project.lock.json
+
+# Cursor / local tooling
+.cursor/
