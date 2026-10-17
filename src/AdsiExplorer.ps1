@@ -10,6 +10,8 @@ param(
 
     [switch]$UseGlobalCatalog,
 
+    [switch]$UseSsl,
+
     [switch]$Quiet,
 
     [string[]]$Commands
@@ -304,6 +306,7 @@ function Invoke-AdsiShellConnect {
     $username = $null
     $baseDn = $null
     $useGc = $false
+    $useSsl = $false
     $credential = $null
 
     for ($i = 0; $i -lt $ShellArgs.Count; $i++) {
@@ -320,6 +323,9 @@ function Invoke-AdsiShellConnect {
             }
             '^-(?i)gc$' {
                 $useGc = $true
+            }
+            '^-(?i)ssl$' {
+                $useSsl = $true
             }
             default {
                 if (-not $server) {
@@ -340,7 +346,7 @@ function Invoke-AdsiShellConnect {
         $credential = New-Object pscredential($username, $secure)
     }
 
-    $session = Connect-AdsiDirectory -Server $server -BaseDn $baseDn -Credential $credential -UseGlobalCatalog:$useGc
+    $session = Connect-AdsiDirectory -Server $server -BaseDn $baseDn -Credential $credential -UseGlobalCatalog:$useGc -UseSsl:$useSsl
     $script:AdsiShell.Session = $session
     $script:AdsiShell.LastSearch = $null
     $script:AdsiShell.LastResults = @()
@@ -350,6 +356,9 @@ function Invoke-AdsiShellConnect {
     Write-Host "  Base DN: $($session.BaseDn)"
     if ($session.UseGlobalCatalog) {
         Write-Host '  Global Catalog: yes'
+    }
+    if ($session.UseSsl) {
+        Write-Host '  LDAPS: yes'
     }
 }
 
@@ -665,7 +674,7 @@ function Show-AdsiShellHelp {
     @'
 Commands:
   connect [server] [domain\user]   Connect (prompts for password if user set)
-  connect -server X -user Y -gc  Named connect options
+  connect -server X -user Y -gc -ssl  Named connect options
   status                           Show session settings
   list [users|groups|...]          List objects (current type)
   list -filter "(...)"             List with custom LDAP filter
@@ -772,7 +781,7 @@ function Start-AdsiExplorer {
         Import-Module PSReadLine -ErrorAction SilentlyContinue | Out-Null
     }
 
-    if ($Server -or $Username -or $Password -or $BaseDn -or $UseGlobalCatalog) {
+    if ($Server -or $Username -or $Password -or $BaseDn -or $UseGlobalCatalog -or $UseSsl) {
         $credential = $null
         if ($Username) {
             if (-not $Password) {
@@ -785,7 +794,8 @@ function Start-AdsiExplorer {
             -Server $Server `
             -BaseDn $BaseDn `
             -Credential $credential `
-            -UseGlobalCatalog:$UseGlobalCatalog
+            -UseGlobalCatalog:$UseGlobalCatalog `
+            -UseSsl:$UseSsl
 
         if (-not $Quiet) {
             $target = if ($Server) { $Server } else { '(default domain)' }

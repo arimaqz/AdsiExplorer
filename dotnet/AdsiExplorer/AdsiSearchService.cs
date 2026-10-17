@@ -9,7 +9,8 @@ internal sealed record SearchOutput(
     bool Truncated,
     bool HasMore,
     int Skip,
-    int? TotalCount = null);
+    int? TotalCount = null,
+    bool SortLimited = false);
 
 internal static class AdsiSearchService
 {
@@ -82,34 +83,29 @@ internal static class AdsiSearchService
                 continue;
             }
 
-            results.Add(ReadSearchResult(entry, properties));
             if (maxResults > 0 && results.Count >= maxResults)
             {
                 hasMore = true;
                 break;
             }
+
+            results.Add(ReadSearchResult(entry, properties));
         }
 
-        if (!hasMore)
-        {
-            var total = 0;
-            foreach (SearchResult _ in found)
-            {
-                total++;
-            }
-
-            hasMore = skip + results.Count < total;
-        }
-
+        var sortLimited = false;
         if (!string.IsNullOrWhiteSpace(sortProperty) && results.Count > 1)
         {
+            if (hasMore || skip > 0)
+            {
+                sortLimited = true;
+            }
+
             results = results
                 .OrderBy(r => r.TryGetValue(sortProperty, out var v) ? v?.ToString() : null, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
-        var truncated = maxResults > 0 && results.Count >= maxResults;
-        return new SearchOutput(ldapFilter, results, truncated, hasMore, skip);
+        return new SearchOutput(ldapFilter, results, hasMore, hasMore, skip, SortLimited: sortLimited);
     }
 
     public static Dictionary<string, object?> ReadAllObjectProperties(AdsiSession session, string distinguishedName)

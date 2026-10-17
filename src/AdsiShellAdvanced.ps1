@@ -44,6 +44,17 @@ function Get-AdsiShellAliases {
     return (ConvertFrom-AdsiJsonMap -Json (Get-Content $file -Raw))
 }
 
+function Test-AdsiShellAliasCommand {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    if ($Command -match '[\r\n;|`]' -or $Command -match '\|\|') {
+        throw 'Alias blocked: command contains disallowed characters.'
+    }
+}
+
 function Save-AdsiShellAliases {
     param([hashtable]$Aliases)
     $file = Join-Path (Get-AdsiShellDataDirectory) 'aliases.json'
@@ -68,6 +79,7 @@ function Expand-AdsiShellAlias {
     $aliases = $script:AdsiShell.Aliases
     if ($aliases.Contains($tokens[0].ToLowerInvariant())) {
         $expansion = [string]$aliases[$tokens[0].ToLowerInvariant()]
+        Test-AdsiShellAliasCommand -Command $expansion
         $rest = if ($tokens.Count -gt 1) { ' ' + ($tokens[1..($tokens.Count - 1)] -join ' ') } else { '' }
         return ($expansion + $rest)
     }
@@ -182,6 +194,9 @@ function Invoke-AdsiShellRunQuery {
     Write-Host "Search base: $($script:AdsiShell.Session.SearchBaseDn)"
     $pageInfo = if ($Skip -gt 0) { " (skip $Skip)" } else { '' }
     Write-Host "Returned $($output.Count) object(s)$pageInfo$(if ($output.Truncated) { ' (page full)' })$(if ($output.HasMore) { ' — type next for more' })."
+    if ($output.SortLimited) {
+        Write-Host 'Note: -sort applies to the current page only, not the full result set.'
+    }
     Format-AdsiShellResultTable -Results $script:AdsiShell.LastResults -Properties $Plan.PropertyList
 }
 
@@ -334,6 +349,7 @@ function Invoke-AdsiShellAlias {
     }
     $name = $ShellArgs[0].ToLowerInvariant()
     $command = ($ShellArgs[1..($ShellArgs.Count - 1)] -join ' ')
+    Test-AdsiShellAliasCommand -Command $command
     $script:AdsiShell.Aliases[$name] = $command
     Save-AdsiShellAliases -Aliases $script:AdsiShell.Aliases
     Write-Host "Alias set: $name => $command"

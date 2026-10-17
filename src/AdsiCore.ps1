@@ -26,6 +26,17 @@ function Escape-LdapFilterValue {
     return $builder.ToString()
 }
 
+function Test-LdapFilterAttributeName {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Attribute
+    )
+
+    if ($Attribute -notmatch '^[\w.-]+$') {
+        throw "Invalid LDAP attribute name for filter: $Attribute"
+    }
+}
+
 function Get-AdsiPresetFilter {
     param(
         [Parameter(Mandatory)]
@@ -67,6 +78,8 @@ function New-AdsiSearchFilter {
         throw 'Attribute cannot be empty.'
     }
 
+    Test-LdapFilterAttributeName -Attribute $Attribute
+
     $escapedValue = if ($Value -match '[*]') {
         ($Value -split '\*' | ForEach-Object { Escape-LdapFilterValue -Value $_ }) -join '*'
     }
@@ -99,6 +112,31 @@ function Convert-AdsiPathToDn {
     return $Path
 }
 
+function Test-AdsiSidFilterValue {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Sid
+    )
+
+    if ($Sid -notmatch '^S-1(-\d+)+$') {
+        throw "Invalid SID format for LDAP filter: $Sid"
+    }
+}
+
+function New-AdsiObjectSidFilter {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Sid
+    )
+
+    Test-AdsiSidFilterValue -Sid $Sid
+    $sidObj = New-Object System.Security.Principal.SecurityIdentifier($Sid)
+    $bytes = New-Object byte[] $sidObj.BinaryLength
+    $sidObj.GetBinaryForm($bytes, 0) | Out-Null
+    $hex = ($bytes | ForEach-Object { '\' + $_.ToString('x2') }) -join ''
+    return "(objectSid=$hex)"
+}
+
 function ConvertFrom-AdsiUserAccountControl {
     param(
         [AllowNull()]
@@ -111,11 +149,22 @@ function ConvertFrom-AdsiUserAccountControl {
 
     $uac = [int]$Value
     $map = @(
+        0x0001, 'SCRIPT'
         0x0002, 'ACCOUNTDISABLE'
+        0x0008, 'HOMEDIR_REQUIRED'
         0x0010, 'LOCKOUT'
         0x0020, 'PASSWD_NOTREQD'
+        0x0040, 'PASSWD_CANT_CHANGE'
+        0x0100, 'TEMP_DUPLICATE_ACCOUNT'
+        0x0200, 'NORMAL_ACCOUNT'
+        0x1000, 'WORKSTATION_TRUST_ACCOUNT'
+        0x2000, 'SERVER_TRUST_ACCOUNT'
         0x10000, 'DONT_EXPIRE_PASSWORD'
+        0x20000, 'MNS_LOGON_ACCOUNT'
+        0x80000, 'TRUSTED_FOR_DELEGATION'
+        0x100000, 'NOT_DELEGATED'
         0x800000, 'PASSWORD_EXPIRED'
+        0x1000000, 'TRUSTED_TO_AUTH_FOR_DELEGATION'
     )
 
     $active = @()
@@ -215,32 +264,24 @@ function Connect-AdsiDirectory {
 
         [pscredential]$Credential,
 
-        [switch]$UseGlobalCatalog
+        [switch]$UseGlobalCatalog,
+
+        [switch]$UseSsl
     )
 
     $username = $null
-    $password = $null
     if ($Credential) {
         $username = $Credential.UserName
-        $secure = $Credential.Password
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        try {
-            $password = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-        }
-        finally {
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-        }
+    }
+
+    if ($UseSsl -and $UseGlobalCatalog) {
+        throw 'UseSsl cannot be combined with Global Catalog in this tool.'
     }
 
     $protocol = if ($UseGlobalCatalog) { 'GC' } else { 'LDAP' }
     $rootPath = if ($Server) { "$protocol`://$Server/RootDSE" } else { "$protocol`://RootDSE" }
 
-    $rootEntry = if ($username) {
-        New-Object System.DirectoryServices.DirectoryEntry($rootPath, $username, $password)
-    }
-    else {
-        New-Object System.DirectoryServices.DirectoryEntry($rootPath)
-    }
+    $rootEntry = New-AdsiDirectoryEntryFromSession -Path $rootPath -UserName $username -Credential $Credential -UseSsl:$UseSsl
 
     $resolvedBase = $BaseDn
     if (-not $resolvedBase) {
@@ -258,13 +299,7 @@ function Connect-AdsiDirectory {
         "$protocol`://$resolvedBase"
     }
 
-    $searchEntry = if ($username) {
-        New-Object System.DirectoryServices.DirectoryEntry($searchBasePath, $username, $password)
-    }
-    else {
-        New-Object System.DirectoryServices.DirectoryEntry($searchBasePath)
-    }
-
+    $searchEntry = New-AdsiDirectoryEntryFromSession -Path $searchBasePath -UserName $username -Credential $Credential -UseSsl:$UseSsl
     $null = $searchEntry.RefreshCache()
 
     [pscustomobject]@{
@@ -272,11 +307,52 @@ function Connect-AdsiDirectory {
         BaseDn           = $resolvedBase
         SearchBaseDn     = $resolvedBase
         UseGlobalCatalog = [bool]$UseGlobalCatalog
+        UseSsl           = [bool]$UseSsl
         RootEntry        = $rootEntry
         SearchEntry      = $searchEntry
         Credential       = $Credential
         UserName         = $username
-        Password         = $password
+    }
+}
+
+function New-AdsiDirectoryEntryFromSession {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [string]$UserName,
+
+        [pscredential]$Credential,
+
+        [switch]$UseSsl
+    )
+
+    if (-not $UserName) {
+        if ($UseSsl) {
+            $auth = [System.DirectoryServices.AuthenticationTypes]::SecureSocketsLayer
+            return New-Object System.DirectoryServices.DirectoryEntry($Path, $null, $null, $auth)
+        }
+
+        return New-Object System.DirectoryServices.DirectoryEntry($Path)
+    }
+
+    $auth = if ($UseSsl) {
+        [System.DirectoryServices.AuthenticationTypes]::SecureSocketsLayer
+    }
+    else {
+        [System.DirectoryServices.AuthenticationTypes]::Secure
+    }
+
+    $bstr = [IntPtr]::Zero
+    try {
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Credential.Password)
+        $password = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        return New-Object System.DirectoryServices.DirectoryEntry($Path, $UserName, $password, $auth)
+    }
+    finally {
+        if ($bstr -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
     }
 }
 
@@ -289,11 +365,7 @@ function Get-AdsiDirectoryEntry {
         [string]$Path
     )
 
-    if ($Session.UserName) {
-        return New-Object System.DirectoryServices.DirectoryEntry($Path, $Session.UserName, $Session.Password)
-    }
-
-    return New-Object System.DirectoryServices.DirectoryEntry($Path)
+    return New-AdsiDirectoryEntryFromSession -Path $Path -UserName $Session.UserName -Credential $Session.Credential -UseSsl:([bool]$Session.UseSsl)
 }
 
 function Set-AdsiSearchBase {
@@ -560,35 +632,34 @@ function Search-AdsiObjects {
                 continue
             }
 
-            $results += Get-AdsiObjectProperties -SearchResult $entry -PropertyNames $Properties
             if ($MaxResults -gt 0 -and $results.Count -ge $MaxResults) {
                 $hasMore = $true
                 break
             }
-        }
 
-        if (-not $hasMore) {
-            $enumerated = 0
-            foreach ($entry in $found) {
-                $enumerated++
-            }
-            $hasMore = ($Skip + $results.Count) -lt $enumerated
+            $results += Get-AdsiObjectProperties -SearchResult $entry -PropertyNames $Properties
         }
     }
     finally {
         $found.Dispose()
     }
 
+    $sortLimited = $false
     if ($SortProperty -and $results.Count -gt 1) {
+        if ($hasMore -or $Skip -gt 0) {
+            $sortLimited = $true
+        }
+
         $results = @($results | Sort-Object { $_.$SortProperty })
     }
 
     [pscustomobject]@{
         Filter       = $ldapFilter
         Count        = $results.Count
-        Truncated    = ($MaxResults -gt 0 -and $results.Count -ge $MaxResults)
+        Truncated    = $hasMore
         HasMore      = $hasMore
         Skip         = $Skip
+        SortLimited  = $sortLimited
         Results      = $results
     }
 }

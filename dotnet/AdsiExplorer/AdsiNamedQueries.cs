@@ -33,11 +33,22 @@ internal static class UserAccountControlHelper
         if (value is null) return string.Empty;
         var uac = Convert.ToInt32(value);
         var flags = new List<string>();
+        if ((uac & 0x1) != 0) flags.Add("SCRIPT");
         if ((uac & 0x2) != 0) flags.Add("ACCOUNTDISABLE");
+        if ((uac & 0x8) != 0) flags.Add("HOMEDIR_REQUIRED");
         if ((uac & 0x10) != 0) flags.Add("LOCKOUT");
         if ((uac & 0x20) != 0) flags.Add("PASSWD_NOTREQD");
+        if ((uac & 0x40) != 0) flags.Add("PASSWD_CANT_CHANGE");
+        if ((uac & 0x100) != 0) flags.Add("TEMP_DUPLICATE_ACCOUNT");
+        if ((uac & 0x200) != 0) flags.Add("NORMAL_ACCOUNT");
+        if ((uac & 0x1000) != 0) flags.Add("WORKSTATION_TRUST_ACCOUNT");
+        if ((uac & 0x2000) != 0) flags.Add("SERVER_TRUST_ACCOUNT");
         if ((uac & 0x10000) != 0) flags.Add("DONT_EXPIRE_PASSWORD");
+        if ((uac & 0x20000) != 0) flags.Add("MNS_LOGON_ACCOUNT");
+        if ((uac & 0x80000) != 0) flags.Add("TRUSTED_FOR_DELEGATION");
+        if ((uac & 0x100000) != 0) flags.Add("NOT_DELEGATED");
         if ((uac & 0x800000) != 0) flags.Add("PASSWORD_EXPIRED");
+        if ((uac & 0x1000000) != 0) flags.Add("TRUSTED_TO_AUTH_FOR_DELEGATION");
         return flags.Count == 0 ? uac.ToString() : $"{uac} ({string.Join(", ", flags)})";
     }
 }

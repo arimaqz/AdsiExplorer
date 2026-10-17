@@ -108,11 +108,7 @@ function New-AdsiIdentitySearchFilter {
             return "(&$typeFilter(anr=$escaped))"
         }
         'objectsid' {
-            $sid = $Value.Trim()
-            if ($sid -notmatch '^S-\d') {
-                throw "objectSid must be in S-1-... form: $Value"
-            }
-            return "(objectSid=$sid)"
+            return New-AdsiObjectSidFilter -Sid $Value.Trim()
         }
         'objectguid' {
             $guidText = $Value.Trim('{}', ' ')
@@ -127,6 +123,7 @@ function New-AdsiIdentitySearchFilter {
             return "(objectGUID=$hex)"
         }
         default {
+            Test-LdapFilterAttributeName -Attribute $Attribute
             return New-AdsiSearchFilter -Attribute $Attribute -Value $Value -ObjectType $ObjectType
         }
     }
@@ -144,7 +141,8 @@ function Get-AdsiSchemaClassAttributes {
     $savedBase = $Session.SearchBaseDn
     $schemaNc = Set-AdsiNamingContext -Session $Session -Context Schema
 
-    $classFilter = "(&(objectClass=classSchema)(|(lDAPDisplayName=$ClassName)(cn=$ClassName)))"
+    $escapedClass = Escape-LdapFilterValue -Value $ClassName
+    $classFilter = "(&(objectClass=classSchema)(|(lDAPDisplayName=$escapedClass)(cn=$escapedClass)))"
     $output = Search-AdsiObjects -Session $Session `
         -ObjectType All `
         -Filter $classFilter `

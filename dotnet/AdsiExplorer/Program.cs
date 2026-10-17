@@ -1,3 +1,5 @@
+using System.Security;
+
 namespace AdsiExplorer;
 
 internal static class Program
@@ -6,9 +8,9 @@ internal static class Program
     {
         string? server = null;
         string? userName = null;
-        string? password = null;
         string? baseDn = null;
         var useGlobalCatalog = false;
+        var useSsl = false;
         var quiet = false;
         var commands = new List<string>();
 
@@ -24,9 +26,6 @@ internal static class Program
                 case "-username":
                     userName = args[++i];
                     break;
-                case "-password":
-                    password = args[++i];
-                    break;
                 case "-basedn":
                 case "-base":
                     baseDn = args[++i];
@@ -34,9 +33,15 @@ internal static class Program
                 case "-gc":
                     useGlobalCatalog = true;
                     break;
+                case "-ssl":
+                    useSsl = true;
+                    break;
                 case "-quiet":
                     quiet = true;
                     break;
+                case "-password":
+                    Console.Error.WriteLine("Warning: -password is not supported (visible in process list). Use prompt or ADSI_PASSWORD.");
+                    return 2;
                 case "-commands":
                     while (++i < args.Length)
                     {
@@ -50,16 +55,26 @@ internal static class Program
             }
         }
 
-        if (userName is not null && password is null && !Console.IsInputRedirected)
+        SecureString? passwordSecure = null;
+        if (userName is not null)
         {
-            Console.Write($"Password for {userName}: ");
-            password = ReadPassword();
+            var fromEnv = Environment.GetEnvironmentVariable("ADSI_PASSWORD");
+            if (!string.IsNullOrEmpty(fromEnv))
+            {
+                passwordSecure = AdsiSession.ToSecureString(fromEnv);
+                Environment.SetEnvironmentVariable("ADSI_PASSWORD", null, EnvironmentVariableTarget.Process);
+            }
+            else if (!Console.IsInputRedirected)
+            {
+                Console.Write($"Password for {userName}: ");
+                passwordSecure = AdsiSession.ToSecureString(ReadPassword());
+            }
         }
 
         var shell = new InteractiveShell(quiet);
-        if (server is not null || userName is not null || password is not null || baseDn is not null || useGlobalCatalog)
+        if (server is not null || userName is not null || passwordSecure is not null || baseDn is not null || useGlobalCatalog || useSsl)
         {
-            shell.ConnectStartup(server, userName, password, baseDn, useGlobalCatalog);
+            shell.ConnectStartup(server, userName, passwordSecure, baseDn, useGlobalCatalog, useSsl);
         }
 
         shell.Run(commands.Count > 0 ? commands : null);
@@ -98,12 +113,14 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  AdsiExplorer [-server HOST] [-user DOMAIN\\user] [-password PASS] [-base DN] [-gc] [-quiet]
+  AdsiExplorer [-server HOST] [-user DOMAIN\\user] [-base DN] [-gc] [-ssl] [-quiet]
                [-commands "list users" "search samAccountName neo"]
 
+Password: prompted at runtime, or set ADSI_PASSWORD (avoid on shared machines; clears only from env if you unset it).
+
 Examples:
-  AdsiExplorer -server 192.168.10.10 -user matrix\\administrator
-  AdsiExplorer -server dc01.matrix.local -user matrix\\administrator -commands "list users" "show 1"
+  AdsiExplorer -server dc01.contoso.com -user CONTOSO\\your.user
+  AdsiExplorer -server dc01.contoso.com -user CONTOSO\\your.user -ssl -commands "list users" "show 1"
 """);
     }
 }

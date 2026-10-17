@@ -7,7 +7,7 @@ internal static class AdsiDirectoryAdvanced
         var output = AdsiSearchService.Search(
             session,
             ObjectType.All,
-            $"(objectSid={sid})",
+            LdapFilter.BuildObjectSidFilter(sid),
             null,
             null,
             ["distinguishedName", "samAccountName"],
@@ -33,7 +33,7 @@ internal static class AdsiDirectoryAdvanced
             var output = AdsiSearchService.Search(
                 session,
                 ObjectType.All,
-                $"(&(objectClass=classSchema)(|(lDAPDisplayName={className})(cn={className})))",
+                $"(&(objectClass=classSchema)(|(lDAPDisplayName={LdapFilter.EscapeValue(className)})(cn={LdapFilter.EscapeValue(className)})))",
                 null,
                 null,
                 ["lDAPDisplayName", "mustContain", "systemMustContain", "mayContain", "systemMayContain", "subClassOf"],

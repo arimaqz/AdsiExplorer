@@ -24,7 +24,7 @@ cd adsi
   -Commands @('list users -props user', 'count users -query disabled')
 ```
 
-Passwords are prompted at runtime and are **not** stored in repo files or saved profiles (profiles only store server, username, and base DN).
+Passwords are prompted at runtime (or `-Password` as `SecureString` in PowerShell only). They are **not** stored in repo files or saved profiles (profiles only store server, username, and base DN). The .NET CLI does **not** accept `-password` on the command line; use the prompt or the `ADSI_PASSWORD` environment variable for automation (clear it afterward on shared systems).
 
 ## Quick start (.NET CLI)
 
@@ -88,6 +88,10 @@ Named queries (`-query`): `disabled`, `locked`, `pwd-never-expires`, `spn`, `emp
 ## Security notes
 
 - Read-only by design (no AD write operations).
+- Default bind is **LDAP** (port 389) with `AuthenticationTypes.Secure` (signed Kerberos/NTLM) when credentials are supplied. Use `-UseSsl` / `connect ... -ssl` / `-ssl` for **LDAPS** (`SecureSocketsLayer`). Plain LDAP without credentials uses the process identity.
+- `search objectSid` / `resolve` use the binary SID form expected by Active Directory.
+- `-sort` orders only the current page when paging or `next` is in use.
+- Search filters built from user input (SIDs, schema class names, attribute values) are escaped or validated to reduce LDAP filter injection risk. Raw `list -filter "(...)"` still accepts full LDAP filter syntax — use only with trusted input.
 - Avoid committing credentials, exports with live directory data, or `%APPDATA%\AdsiExplorer` profile files if they contain sensitive hostnames you do not want public.
 - Run with least-privilege accounts where possible.
 

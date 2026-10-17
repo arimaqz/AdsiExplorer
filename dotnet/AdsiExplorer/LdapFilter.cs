@@ -1,7 +1,20 @@
+using System.Security.Principal;
+using System.Text.RegularExpressions;
+
 namespace AdsiExplorer;
 
 internal static class LdapFilter
 {
+    private static readonly Regex SidFilterPattern = new(@"^S-1(-\d+)+$", RegexOptions.CultureInvariant);
+    private static readonly Regex AttributeNamePattern = new(@"^[\w.-]+$", RegexOptions.CultureInvariant);
+
+    public static void ValidateAttributeName(string attribute)
+    {
+        if (string.IsNullOrWhiteSpace(attribute) || !AttributeNamePattern.IsMatch(attribute))
+        {
+            throw new InvalidOperationException($"Invalid LDAP attribute name for filter: {attribute}");
+        }
+    }
     public static string EscapeValue(string? value)
     {
         if (string.IsNullOrEmpty(value))
@@ -44,6 +57,8 @@ internal static class LdapFilter
             throw new ArgumentException("Attribute cannot be empty.", nameof(attribute));
         }
 
+        ValidateAttributeName(attribute);
+
         var escaped = value.Contains('*', StringComparison.Ordinal)
             ? string.Join("*", value.Split('*').Select(EscapeValue))
             : EscapeValue(value);
@@ -71,12 +86,7 @@ internal static class LdapFilter
 
         if (attr == "objectsid")
         {
-            if (!value.StartsWith("S-", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("objectSid must be in S-1-... form.");
-            }
-
-            return $"(objectSid={value})";
+            return BuildObjectSidFilter(value);
         }
 
         if (attr == "objectguid")
@@ -94,6 +104,21 @@ internal static class LdapFilter
         }
 
         return BuildAttributeFilter(objectType, attribute, value);
+    }
+
+    public static string BuildObjectSidFilter(string sid)
+    {
+        var trimmed = sid.Trim();
+        if (!SidFilterPattern.IsMatch(trimmed))
+        {
+            throw new InvalidOperationException($"Invalid SID format for LDAP filter: {sid}");
+        }
+
+        var sidObj = new SecurityIdentifier(trimmed);
+        var bytes = new byte[sidObj.BinaryLength];
+        sidObj.GetBinaryForm(bytes, 0);
+        var hex = string.Concat(bytes.Select(b => "\\" + b.ToString("x2")));
+        return $"(objectSid={hex})";
     }
 }
 

@@ -1,3 +1,4 @@
+using System.Security;
 using System.Text;
 using System.Text.Json;
 
@@ -12,9 +13,15 @@ internal sealed class InteractiveShell
 
     public int ExitCode => _state.ExitCode;
 
-    public void ConnectStartup(string? server, string? userName, string? password, string? baseDn, bool useGlobalCatalog)
+    public void ConnectStartup(
+        string? server,
+        string? userName,
+        SecureString? password,
+        string? baseDn,
+        bool useGlobalCatalog,
+        bool useSsl = false)
     {
-        _state.Session = AdsiSession.Connect(server, baseDn, userName, password, useGlobalCatalog);
+        _state.Session = AdsiSession.Connect(server, baseDn, userName, password, useGlobalCatalog, useSsl);
         if (!_quiet)
         {
             var target = server ?? "(default domain)";
@@ -181,6 +188,7 @@ internal sealed class InteractiveShell
         string? user = null;
         string? baseDn = null;
         var useGc = false;
+        var useSsl = false;
 
         for (var i = 0; i < args.Count; i++)
         {
@@ -201,6 +209,10 @@ internal sealed class InteractiveShell
             {
                 useGc = true;
             }
+            else if (token.Equals("-ssl", StringComparison.OrdinalIgnoreCase))
+            {
+                useSsl = true;
+            }
             else if (server is null)
             {
                 server = token;
@@ -215,14 +227,23 @@ internal sealed class InteractiveShell
             }
         }
 
-        string? password = null;
+        SecureString? password = null;
         if (!string.IsNullOrWhiteSpace(user))
         {
-            Console.Write($"Password for {user}: ");
-            password = ReadPassword();
+            var fromEnv = Environment.GetEnvironmentVariable("ADSI_PASSWORD");
+            if (!string.IsNullOrEmpty(fromEnv))
+            {
+                password = AdsiSession.ToSecureString(fromEnv);
+                Environment.SetEnvironmentVariable("ADSI_PASSWORD", null, EnvironmentVariableTarget.Process);
+            }
+            else
+            {
+                Console.Write($"Password for {user}: ");
+                password = AdsiSession.ToSecureString(ReadPassword());
+            }
         }
 
-        _state.Session = AdsiSession.Connect(server, baseDn, user, password, useGc);
+        _state.Session = AdsiSession.Connect(server, baseDn, user, password, useGc, useSsl);
         _state.LastSearch = null;
         _state.LastResults.Clear();
 
@@ -232,6 +253,11 @@ internal sealed class InteractiveShell
         if (useGc)
         {
             Console.WriteLine("  Global Catalog: yes");
+        }
+
+        if (useSsl)
+        {
+            Console.WriteLine("  LDAPS: yes");
         }
     }
 
@@ -293,6 +319,15 @@ internal sealed class InteractiveShell
         PrintTable(_state.LastResults, plan.Properties);
     }
 
+    private static void ValidateAliasExpansion(string expansion)
+    {
+        if (expansion.Contains('\r') || expansion.Contains('\n') || expansion.Contains(';')
+            || expansion.Contains('`') || expansion.Contains('|'))
+        {
+            throw new InvalidOperationException("Alias expansion blocked: invalid characters in alias definition.");
+        }
+    }
+
     private string ExpandAlias(string line)
     {
         var tokens = Tokenize(line);
@@ -303,6 +338,7 @@ internal sealed class InteractiveShell
 
         if (_state.Aliases.TryGetValue(tokens[0], out var expansion))
         {
+            ValidateAliasExpansion(expansion);
             var rest = tokens.Count > 1 ? " " + string.Join(' ', tokens.Skip(1)) : string.Empty;
             return expansion + rest;
         }
@@ -347,6 +383,7 @@ internal sealed class InteractiveShell
 
         var name = args[0].ToLowerInvariant();
         var command = string.Join(' ', args.Skip(1));
+        ValidateAliasExpansion(command);
         _state.Aliases[name] = command;
         ShellPersistence.SaveAliases(_state.Aliases);
         Console.WriteLine($"Alias set: {name} => {command}");
@@ -716,6 +753,10 @@ internal sealed class InteractiveShell
         var more = output.HasMore ? " — type next for more" : string.Empty;
         var skip = output.Skip > 0 ? $" (skip {output.Skip})" : string.Empty;
         Console.WriteLine($"Returned {output.Results.Count} object(s){skip}{suffix}{more}.");
+        if (output.SortLimited)
+        {
+            Console.WriteLine("Note: -sort applies to the current page only, not the full result set.");
+        }
     }
 
     private void PrintTable(IReadOnlyList<IndexedResult> results, IReadOnlyList<string> properties)
@@ -1047,7 +1088,7 @@ internal sealed class InteractiveShell
         Console.WriteLine("""
 Commands:
   connect [server] [domain\user]   Connect (prompts for password if user set)
-  connect -server X -user Y -gc  Named connect options
+  connect -server X -user Y -gc -ssl  Named connect options
   status                           Show session settings
   list [users|groups|...]          List objects (current type)
   list -filter "(...)"             List with custom LDAP filter
