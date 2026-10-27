@@ -219,7 +219,7 @@ function Invoke-AdsiShellCount {
 
 function Invoke-AdsiShellTree {
     Assert-AdsiShellConnected
-    $lines = Get-AdsiOuTree -Session $script:AdsiShell.Session
+    $lines = @(Get-AdsiOuTree -Session $script:AdsiShell.Session)
     if ($lines.Count -eq 0) {
         Write-Host 'No OUs under current search base.'
         return

@@ -100,8 +100,14 @@ function Format-AdsiShellCellValue {
         return ''
     }
 
-    $text = if ($Value -is [System.Array]) {
+    $text = if ($Value -is [string]) {
+        $Value
+    }
+    elseif ($Value -is [System.Array]) {
         ($Value -join '; ')
+    }
+    elseif ($Value -is [System.Collections.IEnumerable]) {
+        ($Value | ForEach-Object { [string]$_ }) -join '; '
     }
     else {
         [string]$Value
@@ -205,6 +211,10 @@ function Format-AdsiTableCell {
         [int]$Width
     )
 
+    if ($null -eq $Text) {
+        $Text = ''
+    }
+
     if ($Text.Length -gt $Width) {
         $Text = $Text.Substring(0, $Width)
     }
@@ -228,18 +238,24 @@ function Format-AdsiShellResultTable {
     $maxCell = $script:AdsiShell.TableCellWidth
     $headers = @('#') + @($columns)
 
-    $rows = foreach ($item in $Results) {
-        $cells = @([string]$item.Index)
-        $disabled = Test-AdsiAccountDisabled -UserAccountControl $item.Object.userAccountControl
-        foreach ($prop in $columns) {
-            $val = Format-AdsiShellCellValue -Value $item.Object.$prop -MaxWidth $maxCell
-            if ($disabled -and $prop -ieq 'samAccountName' -and $val) {
-                $val = "[D] $val"
+    $rows = @(
+        foreach ($item in $Results) {
+            $cells = @([string]$item.Index)
+            $uac = $null
+            if ($item.Object.PSObject.Properties['userAccountControl']) {
+                $uac = $item.Object.userAccountControl
             }
-            $cells += [string]$val
+            $disabled = Test-AdsiAccountDisabled -UserAccountControl $uac
+            foreach ($prop in $columns) {
+                $val = Format-AdsiShellCellValue -Value $item.Object.$prop -MaxWidth $maxCell
+                if ($disabled -and $prop -ieq 'samAccountName' -and $val) {
+                    $val = "[D] $val"
+                }
+                $cells += [string]$val
+            }
+            ,@($cells)
         }
-        ,@($cells)
-    }
+    )
 
     $widths = for ($i = 0; $i -lt $headers.Count; $i++) {
         $max = $headers[$i].Length
@@ -265,8 +281,9 @@ function Format-AdsiShellResultTable {
         }
         $line = $lineCells -join ' | '
         $disabled = $false
-        if ($Results[$rowIndex].Object.userAccountControl) {
-            $disabled = Test-AdsiAccountDisabled -UserAccountControl $Results[$rowIndex].Object.userAccountControl
+        $rowObj = $Results[$rowIndex].Object
+        if ($rowObj.PSObject.Properties['userAccountControl']) {
+            $disabled = Test-AdsiAccountDisabled -UserAccountControl $rowObj.userAccountControl
         }
         if ($disabled) {
             Write-Host $line -ForegroundColor DarkGray

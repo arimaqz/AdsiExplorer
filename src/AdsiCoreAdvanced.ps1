@@ -1,6 +1,33 @@
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
+function ConvertTo-AdsiLdapDnList {
+    param(
+        [AllowNull()]
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return @()
+    }
+
+    if ($Value -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return @()
+        }
+        return ,@([string]$Value)
+    }
+
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+        $text = [string]$item
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $list.Add($text) | Out-Null
+    }
+    return ,@($list.ToArray())
+}
+
 function Get-AdsiRootDseAttribute {
     param(
         [Parameter(Mandatory)]
@@ -218,8 +245,8 @@ function Get-AdsiGroupMembers {
         throw "Group not found: $DistinguishedName"
     }
 
-    $members = @($group.Results[0].member)
-    if (-not $members -or $members.Count -eq 0) {
+    $members = ConvertTo-AdsiLdapDnList -Value $group.Results[0].member
+    if ($members.Count -eq 0) {
         return @()
     }
 
@@ -231,7 +258,8 @@ function Get-AdsiGroupMembers {
 
         foreach ($dn in $MemberDns) {
             if ([string]::IsNullOrWhiteSpace($dn)) { continue }
-            if (-not $seen.Add($dn)) { continue }
+            if ($seen.Contains($dn)) { continue }
+            [void]$seen.Add($dn)
 
             $obj = Search-AdsiObjects -Session $Session -ObjectType All `
                 -Filter "(distinguishedName=$(Escape-LdapFilterValue -Value $dn))" `
@@ -246,7 +274,7 @@ function Get-AdsiGroupMembers {
             $results.Add($item) | Out-Null
 
             if ($Recursive -and $Depth -lt $MaxDepth) {
-                $nested = @($item.member)
+                $nested = ConvertTo-AdsiLdapDnList -Value $item.member
                 if ($nested.Count -gt 0) {
                     Add-MemberObjects -MemberDns $nested -Depth ($Depth + 1)
                 }
@@ -255,7 +283,7 @@ function Get-AdsiGroupMembers {
     }
 
     Add-MemberObjects -MemberDns $members -Depth 1
-    return @($results)
+    return ,@($results.ToArray())
 }
 
 function Get-AdsiObjectMemberOf {
@@ -276,29 +304,35 @@ function Get-AdsiObjectMemberOf {
         throw "Object not found: $DistinguishedName"
     }
 
-    $groups = @($obj.Results[0].memberOf)
+    $groups = ConvertTo-AdsiLdapDnList -Value $obj.Results[0].memberOf
     if (-not $Recursive) {
         return $groups
     }
 
     $all = New-Object System.Collections.Generic.HashSet[string]
     $queue = New-Object System.Collections.Generic.Queue[string]
-    foreach ($g in $groups) { $queue.Enqueue($g) }
+    foreach ($g in $groups) { $queue.Enqueue($g) | Out-Null }
 
     while ($queue.Count -gt 0) {
         $dn = $queue.Dequeue()
-        if (-not $all.Add($dn)) { continue }
+        if ([string]::IsNullOrWhiteSpace($dn)) { continue }
+        if ($all.Contains($dn)) { continue }
+        [void]$all.Add($dn)
 
         $parent = Search-AdsiObjects -Session $Session -ObjectType Groups `
             -Filter "(distinguishedName=$(Escape-LdapFilterValue -Value $dn))" `
             -Properties @('memberOf') -MaxResults 1
         if ($parent.Count -eq 0) { continue }
-        foreach ($p in @($parent.Results[0].memberOf)) {
-            $queue.Enqueue($p)
+        foreach ($p in (ConvertTo-AdsiLdapDnList -Value $parent.Results[0].memberOf)) {
+            $queue.Enqueue($p) | Out-Null
         }
     }
 
-    return @($all)
+    $output = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in $all) {
+        [void]$output.Add([string]$entry)
+    }
+    return [string[]]$output.ToArray()
 }
 
 function Get-AdsiOuTree {
@@ -329,5 +363,5 @@ function Get-AdsiOuTree {
         Set-AdsiSearchBase -Session $Session -SearchBaseDn $savedBase | Out-Null
     }
 
-    return @($lines)
+    return [string[]]$lines.ToArray()
 }

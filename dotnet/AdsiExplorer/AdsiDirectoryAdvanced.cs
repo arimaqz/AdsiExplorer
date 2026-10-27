@@ -94,11 +94,7 @@ internal static class AdsiDirectoryAdvanced
         }
 
         var members = output.Results[0].GetValueOrDefault("member");
-        var dns = new List<string>();
-        if (members is IEnumerable<object> items)
-        {
-            dns.AddRange(items.Select(i => i.ToString() ?? string.Empty));
-        }
+        var dns = ToDnList(members);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void Walk(IEnumerable<string> memberDns)
@@ -121,9 +117,9 @@ internal static class AdsiDirectoryAdvanced
                     1).Results.FirstOrDefault();
 
                 Console.WriteLine($"{obj?.GetValueOrDefault("samAccountName")}  {memberDn}");
-                if (recursive && obj?.GetValueOrDefault("member") is IEnumerable<object> nested)
+                if (recursive)
                 {
-                    Walk(nested.Select(x => x.ToString() ?? string.Empty));
+                    Walk(ToDnList(obj?.GetValueOrDefault("member")));
                 }
             }
         }
@@ -150,18 +146,14 @@ internal static class AdsiDirectoryAdvanced
         }
 
         var groups = output.Results[0].GetValueOrDefault("memberOf");
-        var initial = new List<string>();
-        if (groups is IEnumerable<object> items)
-        {
-            initial.AddRange(items.Select(i => i.ToString() ?? string.Empty));
-        }
+        var initial = ToDnList(groups);
 
         var all = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var queue = new Queue<string>(initial);
         while (queue.Count > 0)
         {
             var g = queue.Dequeue();
-            if (!all.Add(g))
+            if (string.IsNullOrWhiteSpace(g) || !all.Add(g))
             {
                 continue;
             }
@@ -182,15 +174,44 @@ internal static class AdsiDirectoryAdvanced
                 1000,
                 1).Results.FirstOrDefault();
 
-            if (parent?.GetValueOrDefault("memberOf") is IEnumerable<object> parents)
+            foreach (var p in ToDnList(parent?.GetValueOrDefault("memberOf")))
             {
-                foreach (var p in parents)
-                {
-                    queue.Enqueue(p.ToString() ?? string.Empty);
-                }
+                queue.Enqueue(p);
             }
         }
 
         Console.WriteLine($"Total: {all.Count}");
+    }
+
+    private static List<string> ToDnList(object? value)
+    {
+        var dns = new List<string>();
+        if (value is null)
+        {
+            return dns;
+        }
+
+        if (value is string s)
+        {
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                dns.Add(s);
+            }
+            return dns;
+        }
+
+        if (value is System.Collections.IEnumerable items and not string)
+        {
+            foreach (var item in items)
+            {
+                var dn = item?.ToString();
+                if (!string.IsNullOrWhiteSpace(dn))
+                {
+                    dns.Add(dn);
+                }
+            }
+        }
+
+        return dns;
     }
 }

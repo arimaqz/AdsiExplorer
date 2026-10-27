@@ -25,7 +25,31 @@ internal static class UserAccountControlHelper
     public static bool IsDisabled(object? value)
     {
         if (value is null) return false;
-        return (Convert.ToInt32(value) & 2) == 2;
+        if (!TryGetNumeric(value, out var uac)) return false;
+        return (uac & 2) == 2;
+    }
+
+    private static bool TryGetNumeric(object value, out int uac)
+    {
+        uac = 0;
+        switch (value)
+        {
+            case int i:
+                uac = i;
+                return true;
+            case long l:
+                uac = (int)l;
+                return true;
+            case string s:
+            {
+                var end = 0;
+                while (end < s.Length && char.IsDigit(s[end])) end++;
+                if (end > 0 && int.TryParse(s[..end], out uac)) return true;
+                return false;
+            }
+            default:
+                return int.TryParse(value.ToString(), out uac);
+        }
     }
 
     public static string Format(object? value)

@@ -184,7 +184,17 @@ function Test-AdsiAccountDisabled {
         return $false
     }
 
-    return (([int]$UserAccountControl -band 2) -eq 2)
+    $numeric = $UserAccountControl
+    if ($UserAccountControl -is [string]) {
+        if ($UserAccountControl -match '^(\d+)') {
+            $numeric = [int]$Matches[1]
+        }
+        else {
+            return $false
+        }
+    }
+
+    return (([int]$numeric -band 2) -eq 2)
 }
 
 function Format-AdsiPropertyValue {
